@@ -499,32 +499,27 @@ class TableauDashboard(StateDashboard, ABC):
     filterFunctionName: Optional[str] = None
     filterFunctionValue: Optional[str] = None
 
-    def get_tableau_view(self):
+    def get_tableau_view(self, extra_get_query=dict):
         def onAlias(it, value, cstring):
             return value[it] if (it >= 0) else cstring["dataValues"][abs(it) - 1]
 
         req = requests_retry_session()
         fullURL = self.baseurl + "/views/" + self.viewPath
+        params = {
+            ":language": "en",
+            ":display_count": "y",
+            ":origin": "viz_share_link",
+            ":embed": "y",
+            ":showVizHome": "n",
+            ":jsdebug": "y",
+            ":apiID": "host4",
+            "#navType": "1",
+            "navSrc": "Parse",
+        }
+        params.update(extra_get_query)
         if self.filterFunctionName is not None:
-            params = ":language=en&:display_count=y&:origin=viz_share_link&:embed=y&:showVizHome=n&:jsdebug=y&"
-            params += self.filterFunctionName + "=" + self.filterFunctionValue
-            reqg = req.get(fullURL, params=params)
-        else:
-            reqg = req.get(
-                fullURL,
-                params={
-                    ":language": "en",
-                    ":display_count": "y",
-                    ":origin": "viz_share_link",
-                    ":embed": "y",
-                    ":showVizHome": "n",
-                    ":jsdebug": "y",
-                    ":apiID": "host4",
-                    "#navType": "1",
-                    "navSrc": "Parse",
-                },
-                headers={"Accept": "text/javascript"},
-            )
+            params[self.filterFunctionName] = self.filterFunctionValue
+        reqg = req.get(fullURL, params=params, headers={"Accept": "text/javascript"})
         soup = BeautifulSoup(reqg.text, "html.parser")
         tableauTag = soup.find("textarea", {"id": "tsConfigContainer"})
         tableauData = json.loads(tableauTag.text)
