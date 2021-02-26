@@ -1022,7 +1022,47 @@ class MicrosoftBIDashboard(StateDashboard, ABC):
 
 
 class GoogleDataStudioDashboard(StateDashboard, ABC):
-    # TODO add method that constructs body json given certain parameters
+
+    def __init__(self, *a, **kw):
+        super(GoogleDataStudioDashboard, self).__init__(*a, **kw)
+        self._sess = None
+
+    @property
+    def sess(self):
+        if self._sess is not None:
+            return self._sess
+        else:
+            self._setup_sess()
+
+    def _setup_sess(self):
+
+        self._sess = requests.Session()
+        self._sess.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+            }
+        )
+        self.source_res = self._sess.get(self.source)
+        self.source_soup = BeautifulSoup(self.source_res.content, features="lxml")
+
+    def get_dashboard_iframe(self):
+        "This method assumes that there is only one PowerBI iframe..."
+        source_iframes = self.source_soup.find_all("iframe")
+        dashboard_frame = [
+            f for f in source_iframes if "datastudio.google" in f["src"]
+        ][0]
+
+        return dashboard_frame
+
+    def powerbi_models_url(self, rk):
+        return (
+            self.powerbi_url
+            + f"/public/reports/{rk}/modelsAndExploration?preferReadOnlySession=true"
+        )
+
+    def powerbi_query_url(self):
+        return self.powerbi_url + "/public/reports/querydata?synchronous=true"
+
 
     def get_dataset(self, body, url) -> str:
         """Accepts JSON body, and a url to post to the data studio batched URL"""
