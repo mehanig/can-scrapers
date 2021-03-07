@@ -72,7 +72,7 @@ class DatasetBase(ABC):
         self.execution_dt = pd.to_datetime(execution_dt, utc=True)
 
         # Set storage path
-        if "DATAPATH" in os.environ.keys():
+        if os.getenv("DATAPATH"):
             self.base_path = Path(os.environ["DATAPATH"])
         else:
             self.base_path = Path.home() / ".can-data"
@@ -80,6 +80,11 @@ class DatasetBase(ABC):
         # Make sure the storage path exists and create if not
         if not self.base_path.exists():
             self.base_path.mkdir(parents=True)
+
+    @property
+    def name(self) -> str:
+        """Name of scraper."""
+        return self.__class__.__name__
 
     def quit_early(self) -> bool:
         """
@@ -149,7 +154,7 @@ class DatasetBase(ABC):
             out[col] = variable_column.map(lambda x: cmu[x].__getattribute__(col))
         return out
 
-    def _filepath(self, raw: bool) -> str:
+    def _filepath(self, raw: bool) -> Path:
         """
         Method for determining the file path/file name -- Everything is
         stored using the following conventions:
@@ -179,17 +184,15 @@ class DatasetBase(ABC):
             be stored
         """
         # Set file path pieces
-        rc, ft = ("raw", "pickle") if raw else ("clean", "parquet")
-        cn = self.__class__.__name__
-        ed = self.execution_dt.strftime(r"%Y-%m-%d_%H")
+        stage = "raw" if raw else "clean"
+        file_type = "pickle" if raw else "parquet"
+        execution_date = self.execution_dt.strftime(r"%Y-%m-%d_%H")
 
         # Set filepath using its components
-        fp = self.base_path / rc / cn
-        if not fp.exists():
-            fp.mkdir(parents=True)
-        fn = fp / f"{ed}.{ft}"
-
-        return fn
+        path = self.base_path / stage / self.name
+        if not path.exists():
+            path.mkdir(parents=True)
+        return path / f"{execution_date}.{file_type}"
 
     def _read_clean(self) -> pd.DataFrame:
         """
@@ -201,12 +204,12 @@ class DatasetBase(ABC):
         df : pd.DataFrame
             The data as a DataFrame
         """
-        fp = self._filepath(raw=False)
-        if not os.path.exists(fp):
+        path = self._filepath(raw=False)
+        if not path.exists():
             msg = "The data that you are trying to read does not exist"
             raise ValueError(msg)
 
-        df = pd.read_parquet(fp)
+        df = pd.read_parquet(path)
 
         return df
 
@@ -248,7 +251,7 @@ class DatasetBase(ABC):
         df.to_parquet(filename)
         return filename
 
-    def _store_raw(self, data: Any) -> bool:
+    def _store_raw(self, data: Any) -> str:
         """
         The `_store_raw` method saves the data into its corresponding
         filepath
@@ -284,7 +287,7 @@ class DatasetBase(ABC):
         """
         pass
 
-    def _fetch(self):
+    def fetch_and_store(self) -> str:
         """
         Fetches the raw data in whatever format it is originally stored
         in and dumps the raw data into storage using the `_store`
@@ -317,22 +320,18 @@ class DatasetBase(ABC):
         """
         pass
 
-    def _normalize(self):
-        """
-        The `_normalize` method should take the data in its raw form
-        from the storage bucket, clean the data, and then save the
-        cleaned data into the bucket
+    def normalize_and_store(self):
+        """Loads data in raw form, cleans data, and persists cleaned data to bucke.
 
         Returns
         -------
         filename : string
             The path to the file where the data was written
         """
-        # Ingest the data
         data = self._read_raw()
 
-        # Clean data using `_normalize`
         df = self.normalize(data)
+
         return self._store_clean(df)
 
     def validate(self, df, df_hist):
@@ -356,11 +355,8 @@ class DatasetBase(ABC):
         """
         return True
 
-    def _validate(self):
-        """
-        The `_validate` method loads the appropriate data and then
-        checks the data using `validate` and determines whether the
-        data has been validated
+    def validate_normalized_data(self) -> bool:
+        """Loads the appropriate data and determines whether data is valid.
 
         Returns
         -------
@@ -397,7 +393,7 @@ class DatasetBase(ABC):
         """
         return self._put_exec(engine, df)
 
-    def _put(self, engine: Engine) -> None:
+    def put_normalized_data(self, engine: Engine) -> None:
         """
         Read DataFrame `df` from storage and put into corresponding
         PostgreSQL database

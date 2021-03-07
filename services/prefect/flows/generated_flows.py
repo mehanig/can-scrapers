@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from typing import Any, Tuple, Type
 
@@ -7,12 +8,14 @@ from can_tools import ALL_SCRAPERS
 from can_tools.scrapers.base import DatasetBase
 
 import prefect
-from prefect import Flow, task
+from prefect import Flow
 from prefect.schedules import CronSchedule
 from prefect.tasks.secrets import EnvVarSecret
 
+_logger = logging.getLogger(__name__)
 
-@task
+
+@prefect.task
 def create_scraper(cls: Type[DatasetBase]) -> DatasetBase:
     logger = prefect.context.get("logger")
     dt = prefect.context.get("scheduled_start_time")
@@ -20,64 +23,68 @@ def create_scraper(cls: Type[DatasetBase]) -> DatasetBase:
     return cls(execution_dt=dt)
 
 
-@task(max_retries=3, retry_delay=timedelta(minutes=1))
-def fetch(d: DatasetBase):
+@prefect.task(max_retries=3, retry_delay=timedelta(minutes=1))
+def fetch(scraper: DatasetBase):
     logger = prefect.context.get("logger")
-    logger.info("About to run {}._fetch".format(d.__class__.__name__))
-    logger.info("In fetch and have execution_dt = {}".format(d.execution_dt))
-    fn = d._fetch()
-    logger.info("{}._fetch success".format(d.__class__.__name__))
-    logger.info("Saved raw data to: {}".format(fn))
+    method_name = f"{scraper.__class__.__name__}.fetch_and_store"
+    logger.info(f"About to run {method_name}")
+    logger.info(f"In fetch and have execution_dt = {scraper.execution_dt}")
+    output_path = scraper.fetch_and_store()
+    logger.info(f"{method_name} success")
+    logger.info(f"Saved raw data to: {output_path}")
 
 
-@task(max_retries=3, retry_delay=timedelta(minutes=1))
-def normalize(d: DatasetBase):
+@prefect.task(max_retries=3, retry_delay=timedelta(minutes=1))
+def normalize(scraper: DatasetBase):
     logger = prefect.context.get("logger")
-    logger.info("About to run {}._normalize".format(d.__class__.__name__))
-    logger.info("In _normalize and have execution_dt = {}".format(d.execution_dt))
-    fn = d._normalize()
-    logger.info("{}._normalize success".format(d.__class__.__name__))
-    logger.info("Saved clean data to: {}".format(fn))
+    method_name = f"{scraper.__class__.__name__}.normalize_and_store"
+    logger.info(f"About to run {method_name}")
+    logger.info(f"In _normalize and have execution_dt = {scraper.execution_dt}")
+
+    output_path = scraper.normalize_and_store()
+
+    logger.info(f"{method_name} success")
+    logger.info(f"Saved clean data to: {output_path}")
 
 
-@task(max_retries=3, retry_delay=timedelta(minutes=1))
-def validate(d: DatasetBase):
-    if not d._validate():
+@prefect.task(max_retries=3, retry_delay=timedelta(minutes=1))
+def validate(scraper: DatasetBase):
+    is_valid = scraper.validate_normalized_data()
+    if not is_valid:
         raise ValueError("failed validation")
 
 
-@task(max_retries=3, retry_delay=timedelta(minutes=1))
-def put(d: DatasetBase, connstr: str):
+@prefect.task(max_retries=3, retry_delay=timedelta(seconds=10))
+def put(scraper: DatasetBase, connstr: str):
     logger = prefect.context.get("logger")
 
     engine = sa.create_engine(connstr)
+    method_name = f"{scraper.__class__.__name__}.put_normalized_data"
+    logger.info(f"About to run {method_name}")
+    logger.info(
+        f"In put_normalized_data and have execution_dt = {scraper.execution_dt}"
+    )
+    success, rows_in, rows_out = scraper.put_normalized_data(engine)
 
-    logger.info("About to run {}._put".format(d.__class__.__name__))
-    logger.info("In _put and have execution_dt = {}".format(d.execution_dt))
-    success, rows_in, rows_out = d._put(engine)
+    logger.info(f"{method_name} success")
+    logger.info(f"Inserted {rows_in} rows")
+    logger.info(f"Deleted {rows_out} rows from temp table")
 
-    logger.info("{}._put success".format(d.__class__.__name__))
-    logger.info("Inserted {} rows".format(rows_in))
-    logger.info("Deleted {} rows from temp table".format(rows_out))
-
-    # do something with success
     return success
 
 
-def create_flow_for_scraper(ix: int, d: Type[DatasetBase]):
-    sched = CronSchedule(f"{ix % 60} */4 * * *")
-
-    with Flow(cls.__name__, sched) as flow:
+def create_flow_for_scraper(scraper_cls: Type[DatasetBase]):
+    with Flow(scraper_cls.__name__) as flow:
         connstr = EnvVarSecret("COVID_DB_CONN_URI")
-        d = create_scraper(cls)
-        fetched = fetch(d)
-        normalized = normalize(d)
-        validated = validate(d)
-        done = put(d, connstr)
+        scraper = create_scraper(scraper_cls)
+        fetch_task = fetch(scraper)
+        normalize_task = normalize(scraper)
+        validate_task = validate(scraper)
+        put_task = put(scraper, connstr)
 
-        normalized.set_upstream(fetched)
-        validated.set_upstream(normalized)
-        done.set_upstream(validated)
+        normalize_task.set_upstream(fetch_task)
+        validate_task.set_upstream(normalize_task)
+        put_task.set_upstream(validate_task)
 
     return flow
 
@@ -87,3 +94,18 @@ for ix, cls in enumerate(ALL_SCRAPERS):
         continue
     flow = create_flow_for_scraper(ix, cls)
     flow.register(project_name="can-scrape")
+
+
+def register_all_scrapers():
+
+    for scraper_cls in ALL_SCRAPERS:
+        if not scraper_cls.autodag:
+            continue
+        _logger.info(f"Registering {scraper_cls.__name__}")
+        flow = create_flow_for_scraper(scraper_cls)
+        flow.register(project_name="can-scrape")
+
+
+if __name__ == "__main__":
+    register_all_scrapers()
+    create_master_flow()

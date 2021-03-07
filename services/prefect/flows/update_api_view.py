@@ -5,13 +5,14 @@ import pathlib
 
 import pandas as pd
 import prefect
+from prefect import triggers
 import sqlalchemy as sa
 from prefect import Flow, task
 from prefect.schedules import CronSchedule
 from prefect.tasks.secrets import EnvVarSecret
 from prefect.tasks.shell import ShellTask
 
-DATA_PATH = pathlib.Path(os.environ["DATAPATH"]) / "final"
+DATA_PATH = pathlib.Path(os.getenv("DATAPATH", str(pathlib.Path.home() / ".can-data"))) / "final"
 CSV_FN = DATA_PATH / "can_scrape_api_covid_us.csv"
 DATA_PATH.mkdir(parents=True, exist_ok=True)
 FN_STR = "can_scrape_api_covid_us{}"
