@@ -11,6 +11,7 @@ import prefect
 from prefect import Flow
 from prefect.schedules import CronSchedule
 from prefect.tasks.secrets import EnvVarSecret
+from prefect.tasks.prefect.flow_run import StartFlowRun
 
 _logger = logging.getLogger(__name__)
 
@@ -89,10 +90,22 @@ def create_flow_for_scraper(scraper_cls: Type[DatasetBase]):
     return flow
 
 
-for ix, cls in enumerate(ALL_SCRAPERS):
-    if not cls.autodag:
-        continue
-    flow = create_flow_for_scraper(ix, cls)
+def create_master_flow():
+    with Flow("MasterFlow") as flow:
+        tasks = []
+        for scraper_cls in ALL_SCRAPERS[:2]:
+            task = StartFlowRun(
+                flow_name=scraper_cls.__name__, project_name="can-scrape", wait=True
+            )
+            tasks.append(task)
+
+        parquet_flow = StartFlowRun(
+            flow_name="UpdateParquetFiles", project_name="can-scrape", wait=True
+        )
+
+        for task in tasks:
+            task.set_downstream(parquet_flow)
+
     flow.register(project_name="can-scrape")
 
 
