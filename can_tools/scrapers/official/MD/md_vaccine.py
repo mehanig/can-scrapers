@@ -1,10 +1,10 @@
 import us
 
-from can_tools.scrapers import DatasetBase, variables
+from can_tools.scrapers import variables
 from can_tools.scrapers.official.base import ArcGIS
 
 
-class MarylandCountyVaccines(ArcGIS, DatasetBase):
+class MarylandCountyVaccines(ArcGIS):
     """
     Fetch county level covid data from Maryland's ARCGIS dashboard
     """
@@ -18,7 +18,6 @@ class MarylandCountyVaccines(ArcGIS, DatasetBase):
 
     variables = {
         "firstdose": variables.INITIATING_VACCINATIONS_ALL,
-        "percentfullyvaccinated": variables.PERCENTAGE_PEOPLE_COMPLETING_VACCINE,
         "fullyvaccinated": variables.FULLY_VACCINATED_ALL,
     }
 
